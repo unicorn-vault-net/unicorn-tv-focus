@@ -1,0 +1,54 @@
+diff --git a/frameworks/base/core/java/android/view/accessibility/AccessibilityManager.java b/frameworks/base/core/java/android/view/accessibility/AccessibilityManager.java
+index 1219f21..67c1269 100644
+--- a/frameworks/base/core/java/android/view/accessibility/AccessibilityManager.java
++++ b/frameworks/base/core/java/android/view/accessibility/AccessibilityManager.java
+@@ -64,6 +64,8 @@ import java.util.List;
+ 
+ import android.os.SystemProperties;
+ import android.os.GXTServiceManager;
++import android.app.ActivityThread;
++import android.view.focus.PackageFilter;
+ 
+ /**
+  * System level service that serves as an event dispatch for {@link AccessibilityEvent}s,
+@@ -460,8 +462,17 @@ public final class AccessibilityManager {
+      */
+     public boolean isEnabled() {
+         synchronized (mLock) {
+-            return mIsEnabled || (mAccessibilityPolicy != null
+-                    && mAccessibilityPolicy.isEnabled(mIsEnabled));
++            // Unicorn: force-enabled only for whitelisted packages when the D-pad
++            // focus overlay needs Compose enumeration. The property checks and the
++            // whitelist read are cached per-process inside PackageFilter, so this
++            // stays cheap on the hot path. No accessibility service is bound; this
++            // only causes View.getAccessibilityNodeProvider() to be created by
++            // Compose hosts.
++            return mIsEnabled
++                    || (mAccessibilityPolicy != null
++                            && mAccessibilityPolicy.isEnabled(mIsEnabled))
++                    || PackageFilter.isA11yForced(
++                            ActivityThread.currentPackageName());
+         }
+     }
+ 
+@@ -688,6 +699,20 @@ public final class AccessibilityManager {
+      */
+     public List<AccessibilityServiceInfo> getEnabledAccessibilityServiceList(
+             int feedbackTypeFlags) {
++        // Unicorn: return a dummy non-empty list for whitelisted packages when the
++        // D-pad focus overlay needs Compose enumeration. Compose's isEnabled check
++        // requires both accessibilityManager.isEnabled AND enabledServices.isNotEmpty().
++        // Without this, Compose never builds its semantics tree even when
++        // isEnabled() returns true.
++        // The dummy is built once per process inside PackageFilter and has non-null
++        // mComponentName AND mResolveInfo:
++        //   - getId() returns mComponentName.flattenToShortString() -> NPE if null
++        //   - getResolveInfo() returns mResolveInfo -> apps may inspect serviceInfo
++        // Netflix's AccessibilityLoggingManager calls getId() on every service,
++        // so a null mComponentName crashes it.
++        if (PackageFilter.isA11yForced(ActivityThread.currentPackageName())) {
++            return PackageFilter.dummyA11yServiceList();
++        }
+         final IAccessibilityManager service;
+         final int userId;
+         synchronized (mLock) {

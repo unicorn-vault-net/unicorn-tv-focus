@@ -1,0 +1,87 @@
+UNICORN TV FOCUS - BINARY LICENSE AGREEMENT
+
+Copyright (c) 2026 Unicorn Vault. All rights reserved.
+
+IMPORTANT - READ CAREFULLY: This Binary License Agreement ("Agreement") is a
+legal agreement between you (either an individual or a single entity,
+"Licensee") and Unicorn Vault ("Licensor") for the binary software components,
+prebuilt libraries, configuration files, patches, and accompanying materials
+distributed in this repository (collectively, the "Software"). By downloading,
+copying, installing, or using the Software, Licensee agrees to be bound by the
+terms of this Agreement. If Licensee does not agree, do not download, copy,
+install, or use the Software.
+
+1. GRANT OF LICENSE
+
+   Subject to the terms of this Agreement, Licensor grants Licensee a
+   non-exclusive, non-transferable, non-sublicensable, limited license to:
+
+   a) use the binary components of the Software solely for integration into
+      Licensee's own products;
+   b) reproduce the binary components as reasonably necessary for such
+      integration and for backup purposes; and
+   c) distribute the binary components only as embedded within, and as an
+      integral part of, Licensee's products, and not on a standalone basis.
+
+2. RESTRICTIONS
+
+   Except as expressly permitted by this Agreement or by applicable law that
+   cannot be waived by contract, Licensee shall not:
+
+   a) reverse engineer, decompile, disassemble, or otherwise attempt to derive
+      the source code of the binary components of the Software;
+   b) modify, adapt, translate, or create derivative works of the binary
+      components;
+   c) redistribute, sell, rent, lease, lend, publish, or otherwise transfer
+      the Software, in whole or in part, to any third party on a standalone
+      basis;
+   d) remove, alter, or obscure any copyright, trademark, or other proprietary
+      notices contained in the Software; or
+   e) use the Software to develop a competing product.
+
+   The framework patch files provided under patches/ are supplied solely so
+   that Licensee may integrate the Software into Licensee's Android builds
+   and are subject to the same terms as the binary components, except that
+   Licensee may apply the patches to Licensee's own Android source trees for
+   that purpose.
+
+3. OWNERSHIP
+
+   The Software is licensed, not sold. Licensor and its suppliers retain all
+   right, title, and interest in and to the Software, including all
+   intellectual property rights. No rights are granted by implication,
+   estoppel, or otherwise. This Agreement does not grant Licensee any rights
+   to any source code, which remains the confidential property of Licensor.
+
+4. NO WARRANTY
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT. LICENSOR DOES NOT
+   WARRANT THAT THE SOFTWARE WILL MEET LICENSEE'S REQUIREMENTS OR THAT
+   OPERATION OF THE SOFTWARE WILL BE UNINTERRUPTED OR ERROR-FREE.
+
+5. LIMITATION OF LIABILITY
+
+   IN NO EVENT SHALL LICENSOR OR ITS SUPPLIERS BE LIABLE FOR ANY INDIRECT,
+   INCIDENTAL, SPECIAL, CONSEQUENTIAL, OR PUNITIVE DAMAGES, OR ANY LOSS OF
+   PROFITS, REVENUE, DATA, OR USE, ARISING OUT OF OR IN CONNECTION WITH THIS
+   AGREEMENT OR THE USE OR INABILITY TO USE THE SOFTWARE, HOWEVER CAUSED AND
+   UNDER ANY THEORY OF LIABILITY, EVEN IF LICENSOR HAS BEEN ADVISED OF THE
+   POSSIBILITY OF SUCH DAMAGES. LICENSOR'S TOTAL LIABILITY SHALL NOT EXCEED
+   THE AMOUNTS, IF ANY, PAID BY LICENSEE FOR THE SOFTWARE.
+
+6. TERMINATION
+
+   This Agreement is effective until terminated. It will terminate
+   automatically without notice if Licensee fails to comply with any term.
+   Upon termination, Licensee must cease all use of the Software and destroy
+   all copies in its possession or control. Sections 2 through 6 survive
+   termination.
+
+7. GENERAL
+
+   This Agreement constitutes the entire agreement between the parties
+   concerning the Software. If any provision is held unenforceable, the
+   remainder continues in full force. Licensee may not assign this Agreement
+   without Licensor's prior written consent.

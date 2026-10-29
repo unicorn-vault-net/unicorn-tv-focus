@@ -1,0 +1,10 @@
+# D-pad focus overlay package whitelist.
+# One package name per line. Lines starting with '#' are comments.
+# If this file is empty or missing, the policy attaches to ALL packages.
+#
+# Default path on device: /system/etc/tvfocus-packages.txt
+# Override at runtime:
+#   adb shell setprop persist.sys.dpad_focus.packages /data/tvfocus/tvfocus-packages.txt
+
+com.android.tv.settings
+com.netflix.mediaclient

@@ -1,0 +1,4 @@
+# Startup prefetch tuples for the Unicorn agent.
+# Install in the agent config directory, not in the TV Focus framework config.
+get-data dHZmb2N1cw ZW5naW5lLWNlcnQ
+get-data dHZmb2N1cw cG9saWN5LXBhY2s

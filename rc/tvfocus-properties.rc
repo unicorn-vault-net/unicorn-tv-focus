@@ -1,0 +1,10 @@
+# Merge into the product's existing init configuration.
+on boot
+    setprop sys.nfx_key_pass 1
+    setprop persist.sys.dpad_focus.policy com.unicorn.focus.FocusPolicy
+    setprop persist.sys.dpad_focus.enabled 1
+    setprop persist.sys.dpad_focus.a11y 1
+    setprop persist.sys.dpad_focus.jar /system/framework/tvfocus-policy.jar
+    setprop persist.sys.dpad_focus.lib /system/lib
+    setprop persist.sys.dpad_focus.scene 0
+    setprop persist.sys.dpad_focus.debug 0

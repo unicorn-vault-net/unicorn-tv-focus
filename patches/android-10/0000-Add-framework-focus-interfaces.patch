@@ -1,0 +1,405 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Unicorn TV Focus Project
+Date: Mon, 1 Sep 2026 12:00:00 +0000
+Subject: [PATCH] Add framework focus interfaces for D-pad focus overlay
+
+Add the framework-side contract classes that ViewRootImpl references
+in patch 0001. These interfaces live in the bootclasspath (framework.jar)
+and are implemented by the replaceable policy jar loaded at runtime.
+
+Also adds PackageFilter, a framework-side class that reads a plain-text package
+list and decides whether the focus policy should be loaded for a given window.
+ViewRootImpl calls this BEFORE instantiating the policy -- non-listed apps get
+zero overhead. It also owns the Compose a11y-force decision (isA11yForced) and
+the cached dummy AccessibilityServiceInfo list used by the AccessibilityManager
+hook in patch 0002.
+
+Apply BEFORE patch 0001-ViewRootImpl-dpad-focus-policy-hooks.patch.
+
+---
+ .../java/android/view/focus/FocusHost.java       | 52 +
+ .../java/android/view/focus/IFocusPolicy.java    | 125 +
+ .../java/android/view/focus/PackageFilter.java   | 183 +
+ 3 files changed, 360 insertions(+)
+ create mode 100644 frameworks/base/core/java/android/view/focus/FocusHost.java
+ create mode 100644 frameworks/base/core/java/android/view/focus/IFocusPolicy.java
+ create mode 100644 frameworks/base/core/java/android/view/focus/PackageFilter.java
+
+diff --git a/frameworks/base/core/java/android/view/focus/FocusHost.java b/frameworks/base/core/java/android/view/focus/FocusHost.java
+new file mode 100644
+index 0000000..77d641c
+--- /dev/null
++++ b/frameworks/base/core/java/android/view/focus/FocusHost.java
+@@ -0,0 +1,52 @@
++/*
++ * Copyright (C) 2026 The Unicorn TV Focus Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ */
++
++package android.view.focus;
++
++import android.annotation.NonNull;
++import android.graphics.Rect;
++import android.view.InputEvent;
++import android.view.View;
++
++/**
++ * Facade the framework passes to an {@link IFocusPolicy}, exposing exactly the pieces of
++ * {@code ViewRootImpl} the policy needs and nothing else.
++ *
++ * <p>Implemented by {@code ViewRootImpl} (or a small inner adapter). Keeping this narrow is what
++ * lets the policy live in a replaceable jar while the framework surface stays frozen.
++ */
++public interface FocusHost {
++
++    /** @return the window's root view; the entry point for the legacy-View walk. */
++    @NonNull View getRootView();
++
++    /** Fill {@code out} with the window frame in screen coordinates. */
++    void getWindowFrame(@NonNull Rect out);
++
++    /** Logical display id this window is on (for per-display cursor scoping). */
++    int getDisplayId();
++
++    /** Package name of the app owning this window (for per-package profile selection). */
++    @NonNull String getPackageName();
++
++    /** Density (dpi / 160) for resolving dp / percent units against this window. */
++    float getDensity();
++
++    /** Request a redraw so a new {@link IFocusPolicy#getFocusRect} result is picked up. */
++    void invalidate();
++
++    /**
++     * Feed a synthesized event back into this window's own input pipeline.
++     *
++     * <p>Same-window, no {@code INJECT_EVENTS} permission required. Used only as the activation
++     * fallback; realistic tap/swipe/fling go through the native {@code uinputd} instead.
++     */
++    void enqueueInputEvent(@NonNull InputEvent event);
++}
+diff --git a/frameworks/base/core/java/android/view/focus/IFocusPolicy.java b/frameworks/base/core/java/android/view/focus/IFocusPolicy.java
+new file mode 100644
+index 0000000..9322da9
+--- /dev/null
++++ b/frameworks/base/core/java/android/view/focus/IFocusPolicy.java
+@@ -0,0 +1,125 @@
++/*
++ * Copyright (C) 2026 The Unicorn TV Focus Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ */
++
++package android.view.focus;
++
++import android.annotation.NonNull;
++import android.annotation.Nullable;
++import android.graphics.Rect;
++import android.graphics.drawable.Drawable;
++import android.view.KeyEvent;
++import java.util.List;
++
++/**
++ * Thin framework-side contract for the system-wide D-pad focus overlay.
++ *
++ * <p>The framework ({@code ViewRootImpl}) knows nothing about the focus algorithm. It only:
++ * <ul>
++ *   <li>hands the policy each candidate D-pad / select key ({@link #onKeyEvent}),</li>
++ *   <li>asks the policy for the rectangle to draw ({@link #getFocusRect}),</li>
++ *   <li>tells the policy the node set may have changed ({@link #onLayoutDirty}).</li>
++ * </ul>
++ *
++ * <p>All methods run on the app's UI thread. The implementation is loaded from a
++ * bootclasspath jar (see {@code persist.sys.dpad_focus.policy}); it never runs in
++ * {@code system_server} and holds no system privileges. Anything global (cross-window cursor,
++ * enable state, per-package profile) is brokered through the implementation's own binder
++ * connection to the coordinator service, not through this interface.
++ *
++ * <p>The implementation must be cheap: {@link #onKeyEvent} is on the input hot path and
++ * {@link #getFocusRect} is called once per draw.
++ */
++public interface IFocusPolicy {
++
++    /**
++     * Called once, right after the policy is attached to a window.
++     *
++     * @param host facade the policy uses to read the window and request redraws / input.
++     */
++    void attach(@NonNull FocusHost host);
++
++    /**
++     * Offer a key event to the policy.
++     *
++     * <p>Invoked from {@code ViewPostImeInputStage.processKeyEvent} <em>after</em> the app's own
++     * {@code mView.dispatchKeyEvent} has declined the event, in place of the framework's
++     * {@code performFocusNavigation}. Returning {@code true} consumes the event (the framework
++     * treats it as {@code FINISH_HANDLED}); returning {@code false} lets the framework fall
++     * through to its default navigation.
++     *
++     * @param event the key event (already declined by the app).
++     * @return {@code true} if the policy handled it.
++     */
++    boolean onKeyEvent(@NonNull KeyEvent event);
++
++    /**
++     * Fill {@code outWindowRect} with the highlight rectangle in <em>window</em> coordinates.
++     *
++     * <p>Called from the draw path. Return {@code false} to draw nothing this frame.
++     *
++     * @param outWindowRect output; window-relative rect to highlight.
++     * @return {@code true} if a rect should be drawn.
++     */
++    boolean getFocusRect(@NonNull Rect outWindowRect);
++
++    /**
++     * Alpha for the highlight drawable, 0-255. The policy dims the rect while a
++     * directional action is in flight (scroll issued but not yet settled) or
++     * while the tracked focus is unconfirmed (gone verdict pending) -- a
++     * "traveling" cue instead of a full-strength ring on a stale position.
++     *
++     * <p>Called from the draw path, after {@link #getFocusRect}. Must be cheap:
++     * derived from policy state, no computation.
++     *
++     * @return drawable alpha, 255 = fully opaque.
++     */
++    int getFocusRectAlpha();
++
++    /**
++     * Optional policy-owned highlight drawable. When non-null the framework draws it instead
++     * of the theme's {@code accessibilityFocusedDrawable}; the policy's drawable is still
++     * alpha-modulated by {@link #getFocusRectAlpha} and clipped by {@link #getOccludingRects}.
++     *
++     * <p>Called once per draw after {@link #getFocusRect}. Must be cheap: return a cached
++     * instance. A {@code default} method so a new framework against an old policy jar (which
++     * lacks the override) falls back to the theme drawable instead of crashing.
++     *
++     * @return the drawable to draw at the focus rect, or {@code null} for the theme default.
++     */
++    @Nullable
++    default Drawable getFocusDrawable() {
++        return null;
++    }
++
++    /**
++     * Append window-coordinate rects of floating action zones that visually occlude the content
++     * below them. The framework clips the focus rect against these so it doesn't draw on top of
++     * a floating bar that should be above the focused view in z-order.
++     *
++     * <p>Called from the draw path, after {@link #getFocusRect}. Must be cheap (read a cache;
++     * the expensive analysis runs only on key press). Append nothing if there are no occluding
++     * zones.
++     *
++     * @param outRects output; append window-relative occluding rects to this list.
++     */
++    void getOccludingRects(@NonNull List<Rect> outRects);
++
++    /**
++     * Signal that the view/semantics tree may have changed (layout, traversal, resize).
++     *
++     * <p>Must be O(1): set a dirty flag only. Actual (re)collection happens lazily on the next
++     * {@link #onKeyEvent}. Called from {@code performTraversals} and {@code handleResized}, which
++     * run on every animation frame -- doing real work here would blow the frame budget.
++     */
++    void onLayoutDirty();
++
++    /** Called when the window is going away; release references and the coordinator connection. */
++    void detach();
++}
+diff --git a/frameworks/base/core/java/android/view/focus/PackageFilter.java b/frameworks/base/core/java/android/view/focus/PackageFilter.java
+new file mode 100644
+index 0000000..5b0fcbad0096eb15b3edd65e97ec3558cdc83f5a
+--- /dev/null
++++ b/frameworks/base/core/java/android/view/focus/PackageFilter.java
+@@ -0,0 +1,183 @@
++/*
++ * Copyright (C) 2026 The Unicorn TV Focus Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ */
++
++package android.view.focus;
++
++import android.accessibilityservice.AccessibilityServiceInfo;
++import android.annotation.NonNull;
++import android.annotation.Nullable;
++import android.content.ComponentName;
++import android.content.pm.ResolveInfo;
++import android.content.pm.ServiceInfo;
++import android.os.SystemProperties;
++import android.util.Log;
++import java.io.BufferedReader;
++import java.io.File;
++import java.io.FileInputStream;
++import java.io.InputStreamReader;
++import java.lang.reflect.Field;
++import java.lang.reflect.Method;
++import java.util.ArrayList;
++import java.util.Collections;
++import java.util.HashSet;
++import java.util.List;
++import java.util.Set;
++
++/**
++ * Framework-side package filter for the D-pad focus overlay.
++ *
++ * <p>Reads a plain-text file listing package names that should receive the focus policy.
++ * One package name per line; lines starting with '#' are comments; empty lines are skipped.
++ *
++ * <p>Default path: {@code /system/etc/tvfocus-packages.txt}
++ * Override at runtime:
++ * {@code adb shell setprop persist.sys.dpad_focus.packages /sdcard/test-packages.txt}
++ *
++ * <p>If the file doesn't exist or is empty, returns {@code true} for all packages (backward
++ * compatibility -- the policy attaches to every window). The filter is loaded once per process
++ * (lazy on first call) and cached; changes require a process restart.
++ *
++ * <p>Called by {@code ViewRootImpl.maybeLoadFocusPolicy()} BEFORE the policy class is
++ * instantiated -- non-listed apps get zero overhead (no instance, no attach, no layout
++ * callbacks).
++ */
++public final class PackageFilter {
++
++    private static final String TAG = "PackageFilter";
++    private static final String PACKAGES_PROP = "persist.sys.dpad_focus.packages";
++    private static final String PACKAGES_DEFAULT_PATH = "/system/etc/tvfocus-packages.txt";
++
++    private static volatile Set<String> sAllowedPackages;  // null = not loaded yet
++    private static final Object sLock = new Object();
++
++    private PackageFilter() {}
++
++    /**
++     * Check whether the focus policy should be loaded for the given package.
++     *
++     * @param packageName the package name of the app owning this window
++     * @return {@code true} if the policy should be attached for this package
++     */
++    public static boolean shouldAttach(@Nullable String packageName) {
++        if (packageName == null || packageName.isEmpty()) return true;
++        Set<String> allowed = sAllowedPackages;
++        if (allowed != null) {
++            // Fast path: already loaded. Empty set = attach to all (backward compat).
++            return allowed.isEmpty() || allowed.contains(packageName);
++        }
++        // Lazy load (synchronized to avoid double-read on concurrent first calls).
++        synchronized (sLock) {
++            if (sAllowedPackages != null) {
++                return sAllowedPackages.isEmpty() || sAllowedPackages.contains(packageName);
++            }
++            sAllowedPackages = loadPackageFilter();
++            Log.i(TAG, "Package filter loaded: " + sAllowedPackages.size() + " packages");
++            return sAllowedPackages.isEmpty() || sAllowedPackages.contains(packageName);
++        }
++    }
++
++    // ---- forced accessibility (Compose semantics enumeration) ---------------------------
++
++    /** Master on/off -- read once per process; a runtime setprop takes effect
++     *  only after the process restarts. */
++    private static volatile int sEnabledCached = -1;  // -1 = unread
++    /** a11y property, read once -- provider creation is attach-scoped anyway. */
++    private static volatile int sA11yPropCached = -1;  // -1 = unread
++
++    /**
++     * Whether this process should see forced accessibility so Compose builds its
++     * semantics tree for the D-pad focus overlay. Requires the master switch
++     * ({@code persist.sys.dpad_focus.enabled}), the a11y property
++     * ({@code persist.sys.dpad_focus.a11y}), and this package in the whitelist.
++     * Apps outside the filter see real accessibility state and pay zero cost.
++     *
++     * @param packageName package of the calling process (ActivityThread.currentPackageName())
++     */
++    public static boolean isA11yForced(@Nullable String packageName) {
++        int e = sEnabledCached;
++        if (e < 0) {
++            e = SystemProperties.getBoolean("persist.sys.dpad_focus.enabled", true) ? 1 : 0;
++            sEnabledCached = e;
++        }
++        if (e == 0) {
++            return false;
++        }
++        int p = sA11yPropCached;
++        if (p < 0) {
++            p = SystemProperties.getBoolean("persist.sys.dpad_focus.a11y", false) ? 1 : 0;
++            sA11yPropCached = p;
++        }
++        return p == 1 && shouldAttach(packageName);
++    }
++
++    private static volatile List<AccessibilityServiceInfo> sDummyA11yServices;
++
++    /**
++     * A dummy non-empty enabled-service list for the AccessibilityManager patch.
++     * Compose's delegate requires {@code enabledServices.isNotEmpty()} in addition to
++     * {@code isEnabled()}. Built once per process; the @hide members
++     * ({@code setComponentName}, {@code mResolveInfo}) are set reflectively so this file
++     * still compiles against the public SDK jar on the host.
++     */
++    @NonNull
++    public static List<AccessibilityServiceInfo> dummyA11yServiceList() {
++        List<AccessibilityServiceInfo> cached = sDummyA11yServices;
++        if (cached != null) {
++            return cached;
++        }
++        final List<AccessibilityServiceInfo> dummy = new ArrayList<>(1);
++        final AccessibilityServiceInfo info = new AccessibilityServiceInfo();
++        try {
++            final String pkg = "com.unicorn.dpadfocus";
++            final String cls = "com.unicorn.dpadfocus.DummyService";
++            final Method setComponentName = AccessibilityServiceInfo.class
++                    .getDeclaredMethod("setComponentName", ComponentName.class);
++            setComponentName.setAccessible(true);
++            setComponentName.invoke(info, new ComponentName(pkg, cls));
++            final Field f = AccessibilityServiceInfo.class.getDeclaredField("mResolveInfo");
++            f.setAccessible(true);
++            final ResolveInfo ri = new ResolveInfo();
++            ri.serviceInfo = new ServiceInfo();
++            ri.serviceInfo.packageName = pkg;
++            ri.serviceInfo.name = cls;
++            f.set(info, ri);
++        } catch (Throwable t) {
++            Log.w(TAG, "Unicorn: failed to build dummy service info", t);
++        }
++        dummy.add(info);
++        cached = Collections.unmodifiableList(dummy);
++        sDummyA11yServices = cached;
++        return cached;
++    }
++
++    private static Set<String> loadPackageFilter() {
++        Set<String> packages = new HashSet<>();
++        try {
++            String path = SystemProperties.get(PACKAGES_PROP, PACKAGES_DEFAULT_PATH);
++            File f = new File(path);
++            if (!f.exists() || !f.canRead()) return packages;
++            BufferedReader reader = new BufferedReader(
++                    new InputStreamReader(new FileInputStream(f), "UTF-8"));
++            try {
++                String line;
++                while ((line = reader.readLine()) != null) {
++                    line = line.trim();
++                    if (line.isEmpty() || line.startsWith("#")) continue;
++                    packages.add(line);
++                }
++            } finally {
++                reader.close();
++            }
++        } catch (Throwable t) {
++            Log.w(TAG, "Package filter load failed: " + t);
++        }
++        return packages;
++    }
++}

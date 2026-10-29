@@ -1,0 +1,8 @@
+# Service fragment. Merge into the product's existing init rc.
+service uinputd /system/bin/uinputd /dev/socket/unicorn-uinputd 1280 720
+    class main
+    user root
+    group root input uhid
+    umask 000
+    seclabel u:r:su:s0
+    restart_period 5

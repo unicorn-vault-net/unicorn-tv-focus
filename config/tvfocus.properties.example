@@ -1,0 +1,8 @@
+# ROM deployment using the system image paths in README.md.
+persist.sys.dpad_focus.policy=com.unicorn.focus.FocusPolicy
+persist.sys.dpad_focus.enabled=1
+persist.sys.dpad_focus.a11y=1
+persist.sys.dpad_focus.jar=/system/framework/tvfocus-policy.jar
+persist.sys.dpad_focus.lib=/system/lib
+persist.sys.dpad_focus.scene=0
+persist.sys.dpad_focus.debug=0

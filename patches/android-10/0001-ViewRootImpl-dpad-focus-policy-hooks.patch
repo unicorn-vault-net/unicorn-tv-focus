@@ -1,0 +1,354 @@
+diff --git a/frameworks/base/core/java/android/view/ViewRootImpl.java b/frameworks/base/core/java/android/view/ViewRootImpl.java
+index d7ae4e6..6f7b3a7 100644
+--- a/frameworks/base/core/java/android/view/ViewRootImpl.java
++++ b/frameworks/base/core/java/android/view/ViewRootImpl.java
+@@ -130,6 +130,10 @@ import java.util.LinkedList;
+ import java.util.List;
+ import java.util.Queue;
+ import java.util.concurrent.CountDownLatch;
++import android.view.focus.FocusHost;
++import android.view.focus.IFocusPolicy;
++import android.view.focus.PackageFilter;
++import dalvik.system.PathClassLoader;
+ 
+ /**
+  * The top of a view hierarchy, implementing the needed protocol between View
+@@ -512,6 +516,15 @@ public final class ViewRootImpl implements ViewParent,
+     static final Interpolator mResizeInterpolator = new AccelerateDecelerateInterpolator();
+     private ArrayList<LayoutTransition> mPendingTransitions;
+ 
++    // ---- Unicorn system-wide D-pad focus overlay (see android.view.focus.IFocusPolicy) ----
++    // The policy is a replaceable jar loaded per-process via PathClassLoader;
++    // ViewRootImpl stays algorithm-agnostic.
++    private IFocusPolicy mFocusPolicy;
++    private final Rect mCustomFocusRect = new Rect();
++    private final ArrayList<Rect> mOccludingRectsTmp = new ArrayList<>();
++    private boolean mForceDrawFocusRect;
++    // -------------------------------------------------------------------------------------
++
+     final ViewConfiguration mViewConfiguration;
+ 
+     /* Drag/drop */
+@@ -964,6 +977,9 @@ public final class ViewRootImpl implements ViewParent,
+                 mAddedTouchMode = (res & WindowManagerGlobal.ADD_FLAG_IN_TOUCH_MODE) != 0;
+                 mAppVisible = (res & WindowManagerGlobal.ADD_FLAG_APP_VISIBLE) != 0;
+ 
++                // Unicorn: load the replaceable D-pad focus policy for this window, if configured.
++                maybeLoadFocusPolicy();
++
+                 if (mAccessibilityManager.isEnabled()) {
+                     mAccessibilityInteractionConnectionManager.ensureConnection();
+                 }
+@@ -2744,6 +2760,11 @@ public final class ViewRootImpl implements ViewParent,
+             }
+         }
+ 
++        // Unicorn: the view tree just went through layout; the collected node set is potentially
++        // stale. This is O(1) (sets a dirty flag in the policy); recollection is lazy on the next
++        // key. Runs every animation frame, so it must stay cheap.
++        notifyFocusPolicyLayoutDirty();
++
+         // Remember if we must report the next draw.
+         if ((relayoutResult & WindowManagerGlobal.RELAYOUT_RES_FIRST_TIME) != 0) {
+             reportNextDraw();
+@@ -3779,6 +3800,214 @@ public final class ViewRootImpl implements ViewParent,
+         } else if (mAttachInfo.mAccessibilityFocusDrawable != null) {
+             mAttachInfo.mAccessibilityFocusDrawable.setBounds(0, 0, 0, 0);
+         }
++        // Unicorn: draw the D-pad focus highlight on top of the app's content. Reusing the
++        // accessibility-focus drawing path keeps this in-window; a SurfaceControl overlay is the
++        // planned alternative when we need to escape window clipping.
++        drawFocusPolicyRectIfNeeded(canvas);
++    }
++
++    // ------------------------------------------------------------------------------------------
++    // Unicorn system-wide D-pad focus overlay integration.
++    //
++    // ViewRootImpl deliberately contains no navigation, collection, or rule logic. It only:
++    //   * loads a replaceable IFocusPolicy for this window (per-process PathClassLoader),
++    //   * offers D-pad/select keys BEFORE the app sees them (see ViewPostImeInputStage),
++    //   * marks it dirty on layout/resize (O(1) flag; lazy recollection),
++    //   * draws the rect it reports.
++    // ------------------------------------------------------------------------------------------
++
++    /** System property naming the fully-qualified IFocusPolicy implementation to load. */
++    private static final String FOCUS_POLICY_PROP = "persist.sys.dpad_focus.policy";
++    private static final String FOCUS_ENABLED_PROP = "persist.sys.dpad_focus.enabled";
++    private static final String FOCUS_DEBUG_PROP = "persist.sys.dpad_focus.debug";
++    private static final String FOCUS_JAR_PROP = "persist.sys.dpad_focus.jar";
++    private static final String FOCUS_LIB_PROP = "persist.sys.dpad_focus.lib";
++
++    /**
++     * Master on/off: persist.sys.dpad_focus.enabled (default 1). Re-read at 2s
++     * granularity so a runtime setprop toggles the policy without a per-frame
++     * property read. When disabled the policy is fully inert -- no key interception,
++     * no layout callbacks, no highlight -- identical to an unloaded policy.
++     */
++    private static volatile long sFocusPolicyEnabledCheckMs;
++    private static volatile boolean sFocusPolicyEnabled = true;
++
++    private static boolean isFocusPolicyEnabled() {
++        final long now = SystemClock.uptimeMillis();
++        if (now - sFocusPolicyEnabledCheckMs > 2000) {
++            sFocusPolicyEnabled = SystemProperties.getBoolean(
++                    FOCUS_ENABLED_PROP, true);
++            sFocusPolicyEnabledCheckMs = now;
++        }
++        return sFocusPolicyEnabled;
++    }
++
++    // Cache the loaded policy class per-process so all ViewRootImpl instances
++    // share one PathClassLoader. Without this, a second window (e.g. dialog)
++    // creates a new PathClassLoader that reloads FocusJni, but System.load()
++    // fails with "already opened by ClassLoader" because the .so is already
++    // loaded by the first classloader -- JNI methods then throw UnsatisfiedLinkError.
++    private static Class<?> sFocusPolicyClass;
++    private static String sFocusPolicyJarPath;
++    private static String sFocusPolicyLibPath;
++
++    private void maybeLoadFocusPolicy() {
++        if (mFocusPolicy != null || !isFocusPolicyEnabled()) {
++            return;
++        }
++        final String impl = SystemProperties.get(FOCUS_POLICY_PROP, "");
++        if (impl.isEmpty()) {
++            return;
++        }
++        // Package filter: skip non-listed packages with zero overhead (no instance,
++        // no attach, no layout callbacks). If the filter file doesn't exist or is empty,
++        // the policy attaches to all packages (backward compatibility).
++        if (!PackageFilter.shouldAttach(mBasePackageName)) {
++            return;
++        }
++        try {
++            // Load from a plain path instead of BOOTCLASSPATH -- avoids needing to
++            // modify init.environ.rc in the read-only boot ramdisk, and BOOTCLASSPATH
++            // cannot reference /data (unverified partition, FBE timing). PathClassLoader
++            // loads the jar's classes.dex directly; the boot classloader is the parent
++            // so IFocusPolicy resolves to the same class from framework.jar.
++            final String jarPath = SystemProperties.get(
++                    FOCUS_JAR_PROP, "/system/framework/tvfocus-policy.jar");
++            final String libPath = SystemProperties.get(
++                    FOCUS_LIB_PROP, "/data/tvfocus/lib");
++            // Reuse the cached class when the jar/lib paths haven't changed so all
++            // windows in the process share one PathClassLoader and the native library
++            // is loaded only once.
++            Class<?> cls = sFocusPolicyClass;
++            if (cls == null || !jarPath.equals(sFocusPolicyJarPath)
++                    || !libPath.equals(sFocusPolicyLibPath)) {
++                cls = new PathClassLoader(
++                        jarPath, libPath,
++                        IFocusPolicy.class.getClassLoader())
++                        .loadClass(impl);
++                sFocusPolicyClass = cls;
++                sFocusPolicyJarPath = jarPath;
++                sFocusPolicyLibPath = libPath;
++            }
++            mFocusPolicy = (IFocusPolicy) cls.getConstructor().newInstance();
++            mFocusPolicy.attach(new FocusHostImpl());
++        } catch (Throwable t) {
++            // Never let a broken policy take down the window; just run without it.
++            Log.w(mTag, "Failed to load focus policy '" + impl + "'", t);
++            mFocusPolicy = null;
++        }
++    }
++
++    /** @return true if the policy consumed the key (framework treats as FINISH_HANDLED). */
++    private boolean handleFocusPolicyKey(KeyEvent event) {
++        if (!isFocusPolicyEnabled()) return false;
++        if (mFocusPolicy == null) {
++            // Lazy re-attach: a window created while the master switch was off picks the
++            // policy up here once enabled flips back on -- no window re-attach needed.
++            maybeLoadFocusPolicy();
++            if (mFocusPolicy == null) return false;
++        }
++        final boolean consumed = mFocusPolicy.onKeyEvent(event);
++        if (SystemProperties.getBoolean(FOCUS_DEBUG_PROP, false)) {
++            Log.i(mTag, "FocusPolicy key=" + KeyEvent.keyCodeToString(event.getKeyCode())
++                    + " consumed=" + consumed);
++        }
++        return consumed;
++    }
++
++    /**
++     * D-pad / select keys that the focus policy should intercept BEFORE the app sees them.
++     * TV-native apps handle D-pad in their own onKeyDown and would swallow the key before
++     * our policy gets a chance. By intercepting these keys pre-dispatch we ensure the policy
++     * always drives focus. Non-D-pad keys (back, volume, shortcuts) are not intercepted.
++     */
++    private boolean isDpadNavigationKey(KeyEvent event) {
++        if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
++        switch (event.getKeyCode()) {
++            case KeyEvent.KEYCODE_DPAD_UP:
++            case KeyEvent.KEYCODE_DPAD_DOWN:
++            case KeyEvent.KEYCODE_DPAD_LEFT:
++            case KeyEvent.KEYCODE_DPAD_RIGHT:
++            case KeyEvent.KEYCODE_DPAD_CENTER:
++            case KeyEvent.KEYCODE_ENTER:
++            case KeyEvent.KEYCODE_MENU:
++                return true;
++            default:
++                return false;
++        }
++    }
++
++    private boolean isZoneTipBackKey(KeyEvent event) {
++        return event.getKeyCode() == KeyEvent.KEYCODE_BACK;
++    }
++
++    private void notifyFocusPolicyLayoutDirty() {
++        if (mFocusPolicy != null && isFocusPolicyEnabled()) {
++            mFocusPolicy.onLayoutDirty();
++        }
++    }
++
++    private void drawFocusPolicyRectIfNeeded(Canvas canvas) {
++        if (mFocusPolicy == null || !isFocusPolicyEnabled()) {
++            return;
++        }
++        if (mFocusPolicy.getFocusRect(mCustomFocusRect) && !mCustomFocusRect.isEmpty()) {
++            final Drawable drawable = getAccessibilityFocusedDrawable();
++            if (drawable != null) {
++                drawable.setBounds(mCustomFocusRect);
++                // Policy dims the ring while a directional action is in flight or
++                // the tracked focus is unconfirmed -- a "traveling" cue instead of
++                // a full-strength ring on a stale position. 255 = fully opaque.
++                drawable.setAlpha(mFocusPolicy.getFocusRectAlpha());
++                // Clip out floating action zones (e.g. bottom action bars drawn above scroll
++                // content) so the focus rect doesn't bleed through them. The occluding rects
++                // are in window coordinates, same as mCustomFocusRect. clipOutRect is API 26+;
++                // we target API 29+. Cost: ~1-3us for the save/clip/restore, negligible vs the
++                // 16ms frame budget. The rects are cached in the policy (updated on key press,
++                // not per frame), so getOccludingRects is a cheap list read.
++                mOccludingRectsTmp.clear();
++                mFocusPolicy.getOccludingRects(mOccludingRectsTmp);
++                if (!mOccludingRectsTmp.isEmpty()) {
++                    canvas.save();
++                    for (int i = 0; i < mOccludingRectsTmp.size(); i++) {
++                        canvas.clipOutRect(mOccludingRectsTmp.get(i));
++                    }
++                    drawable.draw(canvas);
++                    canvas.restore();
++                } else {
++                    drawable.draw(canvas);
++                }
++            }
++        }
++    }
++
++    /** Narrow ViewRootImpl facade handed to the policy; see {@link FocusHost}. */
++    private final class FocusHostImpl implements FocusHost {
++        @Override public View getRootView() {
++            return mView;
++        }
++        @Override public void getWindowFrame(Rect out) {
++            out.set(mWinFrame);
++        }
++        @Override public int getDisplayId() {
++            return mDisplay != null ? mDisplay.getDisplayId() : Display.DEFAULT_DISPLAY;
++        }
++        @Override public String getPackageName() {
++            return mBasePackageName;
++        }
++        @Override public float getDensity() {
++            return mView != null ? mView.getContext().getResources()
++                    .getDisplayMetrics().density : 1f;
++        }
++        @Override public void invalidate() {
++            // Unicorn A10: also mark the root render node dirty so onPostDraw (where the
++            // focus rect is drawn) actually runs even when the view tree itself is unchanged.
++            ViewRootImpl.this.requestInvalidateRootRenderNode();
++            ViewRootImpl.this.invalidate();
++        }
++        @Override public void enqueueInputEvent(InputEvent event) {
++            ViewRootImpl.this.enqueueInputEvent(event);
++        }
+     }
+ 
+     private boolean getAccessibilityFocusedRect(Rect bounds) {
+@@ -4151,6 +4376,15 @@ public final class ViewRootImpl implements ViewParent,
+     }
+ 
+     void dispatchDetachedFromWindow() {
++        // Unicorn: release the focus policy and its coordinator connection before teardown.
++        if (mFocusPolicy != null) {
++            try {
++                mFocusPolicy.detach();
++            } catch (Throwable t) {
++                Log.w(mTag, "Focus policy detach failed", t);
++            }
++            mFocusPolicy = null;
++        }
+         mFirstInputStage.onDetachedFromWindow();
+         if (mView != null && mView.mAttachInfo != null) {
+             mAttachInfo.mTreeObserver.dispatchOnWindowAttachedChange(false);
+@@ -4513,6 +4747,10 @@ public final class ViewRootImpl implements ViewParent,
+                             forceLayout(mView);
+                         }
+                         requestLayout();
++
++                        // Unicorn: window frame / config / display changed; screen-percent units
++                        // and cached rects must be recomputed. O(1) dirty flag only.
++                        notifyFocusPolicyLayoutDirty();
+                     }
+                     break;
+                 case MSG_INSETS_CHANGED:
+@@ -5180,7 +5418,17 @@ public final class ViewRootImpl implements ViewParent,
+ 
+             // If the key's purpose is to exit touch mode then we consume it
+             // and consider it handled.
+-            if (checkForLeavingTouchModeAndConsume(event)) {
++            //
++            // Unicorn: when a D-pad focus policy is active we must NOT swallow that first key
++            // here, otherwise the policy never sees it and the initial DPAD press is lost. We
++            // still leave touch mode (so app-side focus state stays consistent) but let the event
++            // continue to ViewPostImeInputStage, where the policy gets its chance.
++            if (mFocusPolicy != null && isFocusPolicyEnabled()) {
++                if (isInTouchMode()) {
++                    ensureTouchMode(false);
++                }
++                // fall through; do not consume.
++            } else if (checkForLeavingTouchModeAndConsume(event)) {
+                 return FINISH_HANDLED;
+             }
+ 
+@@ -5420,6 +5668,29 @@ public final class ViewRootImpl implements ViewParent,
+                 return FINISH_HANDLED;
+             }
+ 
++            // Unicorn: intercept D-pad navigation keys BEFORE the app sees them. TV-native
++            // apps handle D-pad in their own onKeyDown and would swallow the key before our
++            // policy gets a chance. By intercepting pre-dispatch we ensure the policy always
++            // drives focus. If the policy declines (returns false, e.g. no target found or
++            // at edge of scroll zone), the key falls through to the app's dispatchKeyEvent
++            // and the framework's own performFocusNavigation as normal.
++            // Gate on the keycode + cached master switch; handleFocusPolicyKey lazily loads
++            // the policy so a window created while disabled picks it up on re-enable.
++            if ((isDpadNavigationKey(event) || isZoneTipBackKey(event))
++                    && isFocusPolicyEnabled()) {
++                if (SystemProperties.getBoolean(FOCUS_DEBUG_PROP, false)) {
++                    Log.i(mTag, "Pre-dispatch intercept: "
++                            + KeyEvent.keyCodeToString(event.getKeyCode())
++                            + " policy=" + (mFocusPolicy != null ? "active" : "loading"));
++                }
++                if (handleFocusPolicyKey(event)) {
++                    return FINISH_HANDLED;
++                }
++                if (SystemProperties.getBoolean(FOCUS_DEBUG_PROP, false)) {
++                    Log.i(mTag, "Pre-dispatch: policy declined, falling through to app");
++                }
++            }
++
+             // Deliver the key to the view hierarchy.
+             if (mView.dispatchKeyEvent(event)) {
+                 return FINISH_HANDLED;
+@@ -7192,7 +7462,8 @@ public final class ViewRootImpl implements ViewParent,
+ 
+     public void requestUpdateConfiguration(Configuration config) {
+         Message msg = mHandler.obtainMessage(MSG_UPDATE_CONFIGURATION, config);
+-        mHandler.sendMessage(msg);
++        //mHandler.sendMessage(msg);
++        mHandler.sendMessageDelayed(msg, 500);
+     }
+ 
+     public void loadSystemProperties() {

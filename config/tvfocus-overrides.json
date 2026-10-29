@@ -1,0 +1,38 @@
+{
+  "apps": [
+    {
+      "package": "com.netflix.mediaclient",
+      "overrides": [
+        {
+          "type": "EXCLUDE",
+          "comment": "Exclude the digit-input container so focus goes to the editable child instead",
+          "when": {
+            "facts": {
+              "hasSameSizeChildRow": [1, 1],
+              "sameSizeChildRowCount": [4, 4]
+            }
+          },
+          "match": {
+            "all": [
+              { "flag": { "value": "clickable" } },
+              { "sameSizeChildren": { "count": 4, "tolerancePct": 10, "match": { "nonInteractive": true } } },
+              { "containsChild": { "flag": { "value": "editable" } } },
+              { "notInScrollArea": true }
+            ]
+          }
+        },
+        {
+          "type": "INCLUDE",
+          "comment": "Include the invisible EditText — flag-based exception (geometry can't see visible=false)",
+          "when": {
+            "facts": {
+              "hasSameSizeChildRow": [1, 1],
+              "sameSizeChildRowCount": [4, 4]
+            }
+          },
+          "match": { "flag": { "value": "editable" } }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+diff --git a/frameworks/base/core/res/res/values/strings.xml b/frameworks/base/core/res/res/values/strings.xml
+index 152b131..df5ef5e 100644
+--- a/frameworks/base/core/res/res/values/strings.xml
++++ b/frameworks/base/core/res/res/values/strings.xml
+@@ -5392,4 +5392,6 @@
+     <!-- ChooserActivity - Alphabetically sorted apps list label. [CHAR LIMIT=NONE] -->
+     <string name="chooser_all_apps_button_label">Apps list</string>
+ 
++    <!-- Zone tip shown once per page with multiple scroll areas. MENU switches between them. -->
++    <string name="tvfocus_zone_tip_switch_areas">Tips: You can press MENU key to switch between areas</string>
+ </resources>

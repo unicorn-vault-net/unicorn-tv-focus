@@ -8,10 +8,12 @@ agent. They are delivered sealed and are not installed as local files.
 - operation: `get-data`
 - resource_family_id: `tvfocus`
 - logical_data_id: `engine-cert`
-- current generation: `tvfocus-ec-g5`
-- payload_file: `payloads/libfocusx_full-tvfocus-ec-g5.so`
-- size: 698632 bytes
-- sha256: `4edd5fdcc603bc111dab0c4b2f8313e9262adbe56f34ee32d9a9335640a62c19`
+- current generation: `tvfocus-ec-g8`
+- payload_file: `payloads/libfocusx_full-tvfocus-ec-g8.so`
+- size: 770996 bytes
+- sha256: `e881675c4eb8f36542e403e422ce0a1f88053195032993f40b99476c16ffb000`
+- engine ABI: 4 — the release JNI rejects ABI 3 engines; do not promote
+  an older generation without checking the JNI's accepted ABI
 
 ## policy-pack (rule pack)
 
@@ -22,14 +24,14 @@ agent. They are delivered sealed and are not installed as local files.
 - size: 307 bytes
 - sha256 prefix: `b8955bdf13e6c476`
 
-## extkey-v1 (engine external keyring)
+## obf-key-v1 (engine external keyring)
 
 - operation: `get-data`
 - resource_family_id: `tvfocus`
-- logical_data_id: `extkey-v1`
-- current generation: `tvfocus-ek-g1`
+- logical_data_id: `obf-key-v1`
+- current generation: `tvfocus-ok-g1`
 - size: 256 bytes
-- sha256 prefix: `11488599731da167`
+- sha256 prefix: `e3ac72f9db81ab5e`
 
 The 256-byte keyring is delivered like any other protected payload;
 the engine installs it in memory at runtime and it is never stored

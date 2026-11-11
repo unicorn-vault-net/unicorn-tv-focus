@@ -22,6 +22,21 @@ agent. They are delivered sealed and are not installed as local files.
 - size: 307 bytes
 - sha256 prefix: `b8955bdf13e6c476`
 
+## extkey-v1 (engine external keyring)
+
+- operation: `get-data`
+- resource_family_id: `tvfocus`
+- logical_data_id: `extkey-v1`
+- current generation: `tvfocus-ek-g1`
+- size: 256 bytes
+- sha256 prefix: `11488599731da167`
+
+The 256-byte keyring is delivered like any other protected payload;
+the engine installs it in memory at runtime and it is never stored
+as a local file. It is bound to the engine build it was generated
+for — a future engine generation that changes its sealed constants
+requires a new `logical_data_id` generation of this entry.
+
 ## Prefetch
 
 `config/prefetch.list` contains the same two tuples so the agent can warm the

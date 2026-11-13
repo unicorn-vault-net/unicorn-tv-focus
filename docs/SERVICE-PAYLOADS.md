@@ -8,12 +8,19 @@ agent. They are delivered sealed and are not installed as local files.
 - operation: `get-data`
 - resource_family_id: `tvfocus`
 - logical_data_id: `engine-cert`
-- current generation: `tvfocus-ec-g8`
-- payload_file: `payloads/libfocusx_full-tvfocus-ec-g8.so`
-- size: 770996 bytes
-- sha256: `e881675c4eb8f36542e403e422ce0a1f88053195032993f40b99476c16ffb000`
-- engine ABI: 4 — the release JNI rejects ABI 3 engines; do not promote
-  an older generation without checking the JNI's accepted ABI
+- current generation: `tvfocus-ec-g10`
+- payload_file: `payloads/libfocusx_full-tvfocus-ec-g10.so`
+- size: 772373 bytes
+- sha256: `d26821da7aedd54e61921da8cceab7835da4b53c379077704dbc0ca699e80576`
+- engine ABI: 5 — full-gate hardened build (OLLVM pinned-seed + OBF +
+  ext-key + BLA), complete vtable; the release JNI rejects ABI 3 engines
+- earlier generations `tvfocus-ec-g9` (`7fe27a76…`) and `tvfocus-ec-g8`
+  (`e881675c…`, ABI 4 — the `E200` cause) were REMOVED from the catalog:
+  a stale engine must never resolve as a fallback. Generation ids are
+  never pinned, so the swap is a live replace; `catalog.json.bak-ec-g10`
+  covers instant rollback
+- device success signals: `I100` certified-active + `I102` pack installed
+  + `I103` keyring — not `E200`/`I101`
 
 ## policy-pack (rule pack)
 
